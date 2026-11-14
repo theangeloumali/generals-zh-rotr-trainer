@@ -15,7 +15,7 @@ internal sealed class MainForm : Form
         "Owner rules: single-player and skirmish only. Close the trainer and restart the game before any LAN " +
         "or online session. Do not share replays of trained matches.";
 
-    private static readonly Keys[] FeatureHotkeys = [Keys.F6, Keys.F7, Keys.F8, Keys.F9, Keys.F10];
+    private static readonly Keys[] FeatureHotkeys = [Keys.F6, Keys.F7, Keys.F8, Keys.F9, Keys.F10, Keys.Insert];
     private static readonly Color ArmedColor = Color.Firebrick;
     private static readonly Color DisarmedColor = Color.DarkGreen;
 

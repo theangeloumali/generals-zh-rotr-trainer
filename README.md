@@ -18,8 +18,9 @@ Early and lightly tested. It has been used on one machine, with Rise of the Reds
 | F8 | Fast build | Units and structures build in a fraction of the time. Upgrades keep their normal time. |
 | F9 | Free build | Units and structures cost nothing. |
 | F10 | Unlimited power | Your base never runs short of power, and a power sabotage ends within a moment. |
+| Insert | No cooldown | General powers, superweapons and unit abilities are ready again straight away. |
 
-All five work by changing values in the game's memory. No game code and no game file is modified.
+All six work by changing values in the game's memory. No game code and no game file is modified.
 
 ## Single-player only
 
@@ -47,8 +48,8 @@ Starting the trainer while the game is already on screen, or keeping its window 
 
 - **Saving with fast build, free build or unlimited power on keeps the effect in the save**, even with the trainer closed. Turn them off before saving if you do not want that.
 - **Unlimited power turned on while the base is already in low power** lifts at the next power change (build or sell any building).
-- **Long matches with very large armies can crash the game.** The cause is not confirmed; the leading suspect is the 32-bit game running out of memory.
-- **Experimental code patches** (`--code-patches`: instant upgrades, no cooldown, a fix for a known engine crash) black out the game's picture on the test machine and are off by default. The cause is not yet known.
+- **Long matches with very large armies can crash the game.** The cause is not confirmed. The leading suspect is the 32-bit game running out of memory: in recorded matches it reached 87% of its 2 GB limit within 18 minutes.
+- **Experimental code patches** (`--code-patches`: instant upgrades, a fix for a known engine crash) black out the game's picture on the test machine and are off by default. The cause is not yet known.
 
 ## How it works
 

@@ -241,6 +241,116 @@ public static class ValueFeatureTests
         Check.Equal(writesBefore, memory.Writes.Count, "a reset record no longer holds the bonus");
     }
 
+    private const uint TimerListHead = 0x00700000;
+    private const uint FirstTimerNode = 0x00700100;
+    private const uint SecondTimerNode = 0x00700200;
+
+    // STLport list: the player holds a pointer to a sentinel node; nodes are next, prev, templateId, readyFrame.
+    private static FakeMemory SkirmishWithSharedTimers(uint firstReadyFrame, uint secondReadyFrame)
+    {
+        var memory = Skirmish();
+        memory.MapUInt32(LocalPlayer + GameAddresses.PlayerSharedPowerTimerList, TimerListHead);
+        memory.MapUInt32(TimerListHead, FirstTimerNode);
+        memory.MapUInt32(FirstTimerNode, SecondTimerNode);
+        memory.MapUInt32(FirstTimerNode + SharedPowerCooldown.NodeReadyFrame, firstReadyFrame);
+        memory.MapUInt32(SecondTimerNode, TimerListHead);
+        memory.MapUInt32(SecondTimerNode + SharedPowerCooldown.NodeReadyFrame, secondReadyFrame);
+        return memory;
+    }
+
+    public static void TestSharedPowerTimersInTheFutureAreMadeReadyNow()
+    {
+        var context = Context(SkirmishWithSharedTimers(firstReadyFrame: 90_000, secondReadyFrame: 1));
+        var memory = (FakeMemory)context.Memory;
+        new SharedPowerCooldown().Apply(context);
+        Check.Equal(context.Frame, Read(memory, FirstTimerNode + SharedPowerCooldown.NodeReadyFrame), "future timer");
+        Check.Equal(1u, Read(memory, SecondTimerNode + SharedPowerCooldown.NodeReadyFrame), "already ready, untouched");
+        Check.Equal(1, memory.Writes.Count, "one write");
+    }
+
+    public static void TestSharedPowerTimerWalkStopsOnACorruptList()
+    {
+        var context = Context(SkirmishWithSharedTimers(firstReadyFrame: 90_000, secondReadyFrame: 90_000));
+        var memory = (FakeMemory)context.Memory;
+        memory.MapUInt32(SecondTimerNode, FirstTimerNode);
+        new SharedPowerCooldown().Apply(context);
+        Check.True(memory.Writes.Count <= SharedPowerCooldown.MaxNodes, "a looping list is abandoned");
+    }
+
+    public static void TestSharedPowerTimerEmptyListWritesNothing()
+    {
+        var memory = Skirmish();
+        memory.MapUInt32(LocalPlayer + GameAddresses.PlayerSharedPowerTimerList, TimerListHead);
+        memory.MapUInt32(TimerListHead, TimerListHead);
+        new SharedPowerCooldown().Apply(Context(memory));
+        Check.Equal(0, memory.Writes.Count, "nothing to do");
+    }
+
+    private const uint ObjectVector = 0x00800000;
+    private const uint SpecialPowerVtable = 0x00950000;
+    private const uint SpecialPowerAccessor = 0x00545000;
+    private const uint OtherVtable = 0x00951000;
+    private const uint NullAccessor = 0x008E0000;
+
+    // One object owned by `owner`, with a plain module followed by a special-power module charging until `readyFrame`.
+    private static uint MapObjectWithSuperweapon(FakeMemory memory, uint objectAddress, uint owner, uint readyFrame)
+    {
+        uint team = objectAddress + 0x1000, prototype = objectAddress + 0x1100, behaviors = objectAddress + 0x1200;
+        uint plainModule = objectAddress + 0x1300, powerModule = objectAddress + 0x1400;
+        memory.MapUInt32(objectAddress + GameAddresses.ObjectTeam, team);
+        memory.MapUInt32(team + GameAddresses.TeamPrototype, prototype);
+        memory.MapUInt32(prototype + GameAddresses.TeamPrototypeOwner, owner);
+        memory.MapUInt32(objectAddress + GameAddresses.ObjectBehaviors, behaviors);
+        memory.MapUInt32(behaviors, plainModule);
+        memory.MapUInt32(behaviors + 4, powerModule);
+        memory.MapUInt32(behaviors + 8, 0);
+        memory.MapUInt32(plainModule + GameAddresses.ModuleInterfaceVtable, OtherVtable);
+        memory.MapUInt32(powerModule + GameAddresses.ModuleInterfaceVtable, SpecialPowerVtable);
+        memory.MapUInt32(powerModule + GameAddresses.SpecialPowerAvailableOnFrame, readyFrame);
+        return powerModule + GameAddresses.SpecialPowerAvailableOnFrame;
+    }
+
+    private static FakeMemory SkirmishWithObjects(params uint[] objects)
+    {
+        var memory = Skirmish();
+        memory.MapUInt32(LocalPlayer + GameAddresses.PlayerSharedPowerTimerList, TimerListHead);
+        memory.MapUInt32(TimerListHead, TimerListHead);
+        memory.MapUInt32(GameLogicObject + GameAddresses.GameLogicObjectVectorBegin, ObjectVector);
+        memory.MapUInt32(GameLogicObject + GameAddresses.GameLogicObjectVectorEnd, ObjectVector + 4 * (uint)objects.Length);
+        for (int index = 0; index < objects.Length; index++)
+            memory.MapUInt32(ObjectVector + 4 * (uint)index, objects[index]);
+        memory.MapUInt32(SpecialPowerVtable + GameAddresses.InterfaceGetSpecialPowerSlot, SpecialPowerAccessor);
+        memory.Map(SpecialPowerAccessor, SharedPowerCooldown.SpecialPowerAccessorCode);
+        memory.MapUInt32(OtherVtable + GameAddresses.InterfaceGetSpecialPowerSlot, NullAccessor);
+        memory.Map(NullAccessor, [0x33, 0xC0, 0xC3, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90]);
+        return memory;
+    }
+
+    public static void TestBuildingPowerTimerOfTheLocalPlayerIsMadeReady()
+    {
+        var memory = SkirmishWithObjects(0, 0x00A00000);
+        uint timer = MapObjectWithSuperweapon(memory, 0x00A00000, LocalPlayer, readyFrame: 9_000);
+        new SharedPowerCooldown().Apply(Context(memory));
+        Check.Equal(100u, Read(memory, timer), "ready at the current frame");
+    }
+
+    public static void TestBuildingPowerTimerOfAnotherPlayerIsLeftAlone()
+    {
+        var memory = SkirmishWithObjects(0x00A00000);
+        uint timer = MapObjectWithSuperweapon(memory, 0x00A00000, OtherPlayer, readyFrame: 9_000);
+        new SharedPowerCooldown().Apply(Context(memory));
+        Check.Equal(9_000u, Read(memory, timer), "AI superweapon keeps charging");
+        Check.Equal(0, memory.Writes.Count, "no write");
+    }
+
+    public static void TestBuildingPowerTimerThatLooksLikeGarbageIsLeftAlone()
+    {
+        var memory = SkirmishWithObjects(0x00A00000);
+        uint timer = MapObjectWithSuperweapon(memory, 0x00A00000, LocalPlayer, readyFrame: 0xFFFFFFFF);
+        new SharedPowerCooldown().Apply(Context(memory));
+        Check.Equal(0xFFFFFFFFu, Read(memory, timer), "not a plausible ready frame");
+    }
+
     public static void TestSciencePointsAreKeptAtTheFloor()
     {
         var memory = Skirmish();

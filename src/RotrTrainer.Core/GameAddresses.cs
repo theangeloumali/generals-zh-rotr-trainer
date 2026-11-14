@@ -42,10 +42,27 @@ public sealed record GameAddresses
     public const uint PlayerSciencePurchasePoints = 0x190;
     public const uint PlayerLevelUpThreshold = 0x194;
     public const uint PlayerIsObserver = 0x262;
+    // Pointer to the sentinel node of the shared special-power timer list (proven at 0x456ADF)
+    public const uint PlayerSharedPowerTimerList = 0x418;
     public const uint PlayerIsDead = 0x448;
     public const uint EnergyOwnerPlayer = 0x10;
     public const uint GameLogicFrame = 0x3C;
     public const uint GameLogicGameMode = 0x94;
+
+    // Object lookup vector (ID -> Object*, entries may be NULL), proven at the findObjectByID inline near 0x4A16A0
+    public const uint GameLogicObjectVectorBegin = 0x70;
+    public const uint GameLogicObjectVectorEnd = 0x74;
+
+    // Object -> owning player is [[[object + Team] + Prototype] + Owner] (Object::getControllingPlayer, 0x547C30)
+    public const uint ObjectTeam = 0x1B0;
+    public const uint TeamPrototype = 0x08;
+    public const uint TeamPrototypeOwner = 0x0C;
+
+    // NULL-terminated BehaviorModule* array; each module's interface vtable holds getSpecialPower at slot 7
+    public const uint ObjectBehaviors = 0x16C;
+    public const uint ModuleInterfaceVtable = 0x10;
+    public const uint InterfaceGetSpecialPowerSlot = 0x1C;
+    public const uint SpecialPowerAvailableOnFrame = 0x18;
 }
 
 public enum GameMode

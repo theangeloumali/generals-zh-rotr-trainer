@@ -74,7 +74,7 @@ internal static class Program
         return memory is null ? null : new AttachedGame(memory, memory.ExePath, memory.ProcessId, memory.StartTimeUtc);
     }
 
-    // Order is the display order and the hotkey order from F6; at most five toggles fit F6-F10.
+    // Order is the display order and the hotkey order from F6; the window has six toggle hotkeys (F6-F10, Insert).
     private static IReadOnlyList<FeatureBinding> CreateBindings(bool includeCodePatches)
     {
         if (!includeCodePatches)
@@ -86,6 +86,7 @@ internal static class Program
                 new(new FastBuild(), () => null),
                 new(new FreeBuild(), () => null),
                 new(new PowerBonus(), () => null),
+                new(new SharedPowerCooldown(), () => null),
             ];
         }
 

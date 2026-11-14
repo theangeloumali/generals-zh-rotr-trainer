@@ -6,3 +6,5 @@ obj/
 claudedocs/*.html
 recordings/
 publish/
+release/
+claudedocs/game-memory-log.txt
