@@ -1,0 +1,8 @@
+bin/
+obj/
+.vs/
+*.user
+.claude/worktrees/
+claudedocs/*.html
+recordings/
+publish/
