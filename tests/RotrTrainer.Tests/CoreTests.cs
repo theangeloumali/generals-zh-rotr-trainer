@@ -190,6 +190,8 @@ public static class CoreTests
 
     private static readonly GameAddresses TestAddresses = new()
     {
+        ImageCheckAddress = 0x00401000,
+        ImageCheckBytes = [0xA1],
         BuildName = "test",
         PlayerListPointer = 0x00A2B600,
         GameLogicPointer = 0x00A2BB64,
@@ -339,7 +341,7 @@ public static class CoreTests
 
     public static void TestWin32OpenReportsPathStartTimeAndLiveness()
     {
-        var memory = Win32ProcessMemory.Open(Environment.ProcessId, out string failure);
+        var memory = Win32ProcessMemory.Open(Environment.ProcessId, allowSuspend: false, out string failure);
         Check.True(memory is not null, $"opens own process ({failure})");
         using (memory)
         {
@@ -355,7 +357,7 @@ public static class CoreTests
 
     public static void TestWin32OpenFailsForMissingPid()
     {
-        Check.True(Win32ProcessMemory.Open(3, out string failure) is null, "pid 3 cannot be opened");
+        Check.True(Win32ProcessMemory.Open(3, allowSuspend: false, out string failure) is null, "pid 3 cannot be opened");
         Check.True(failure.Length > 0, "failure has a reason");
     }
 }

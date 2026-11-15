@@ -8,4 +8,6 @@ public sealed class FreeBuild() : HandicapScale(
     public const float BuildCostScale = 0.00001f;
 
     public override string Name => "Free build";
+
+    public override string Description => "Units and structures cost nothing";
 }

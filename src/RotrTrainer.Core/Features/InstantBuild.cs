@@ -8,6 +8,9 @@ public sealed class InstantBuild : IFeature
     private readonly PatchSet _patches = new(CreatePatches);
 
     public string Name => "Instant build";
+
+
+    public string Description => "Experimental: one-frame builds by code patch";
     public bool Enabled { get; set; }
     public bool NeedsArming => true;
     public string? Failure => _patches.Failure;

@@ -1,11 +1,14 @@
+using System.IO;
 using System.Runtime.InteropServices;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using RotrTrainer.Core;
 using RotrTrainer.Core.Features;
 
-namespace RotrTrainer;
+// An elevated process must never pick up a native DLL from its own folder.
+[assembly: DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
 
-/// <summary>A feature plus how to read its failure text, which IFeature and FeatureStatus do not carry.</summary>
-internal sealed record FeatureBinding(IFeature Feature, Func<string?> Failure);
+namespace RotrTrainer;
 
 internal static class Program
 {
@@ -17,7 +20,10 @@ internal static class Program
     private const int TickIntervalMs = 100;
     private const int ExitOk = 0;
     private const int ExitNothingAttached = 1;
-    private const int ExitUsage = 2;
+    private const int ExitUnsafeFolder = 3;
+    private const int ExitAlreadyRunning = 4;
+    private const string ProbeFileName = "probe.txt";
+    private const string ProductName = "Command and Conquer Zero Hour RoTR Trainer";
 
     [DllImport("kernel32.dll", ExactSpelling = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
@@ -28,22 +34,35 @@ internal static class Program
     {
         SetDefaultDllDirectories(LoadLibrarySearchSystem32);
 
-        if (args.Length > 0 && args[0] == ProbeFlag)
-            return args.Length == 2 ? RunProbe(args[1]) : ExitUsage;
+        if (IsElevated() && FolderIsWritableByNonAdmins(AppContext.BaseDirectory))
+        {
+            System.Windows.MessageBox.Show(
+                "The trainer runs as administrator, so it will not start from a folder that ordinary programs can change.\n\n"
+                + "Move the whole folder to a place only administrators can write to, for example C:\\Program Files\\RoTR-Trainer, and start it from there.",
+                ProductName);
+            return ExitUnsafeFolder;
+        }
 
-        ApplicationConfiguration.Initialize();
-        // The SDK forbids DPI keys in the manifest; set after Initialize, which resets the mode.
-        Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
-        var bindings = CreateBindings(includeCodePatches: args.Contains(CodePatchesFlag));
-        using var engine = CreateEngine(bindings);
-        Application.Run(new MainForm(engine, bindings));
+        using var singleInstance = new Mutex(initiallyOwned: true, @"Local\ZKidzDev.RotrTrainer", out bool isFirstInstance);
+        if (!isFirstInstance)
+        {
+            System.Windows.MessageBox.Show("The trainer is already running.", ProductName);
+            return ExitAlreadyRunning;
+        }
+
+        bool includeCodePatches = args.Contains(CodePatchesFlag);
+        var features = CreateFeatures(includeCodePatches);
+        using var engine = CreateEngine(features, allowSuspend: includeCodePatches);
+        if (args.Contains(ProbeFlag))
+            return RunProbe(engine);
+
+        new System.Windows.Application().Run(new MainWindow(engine, features));
         return ExitOk;
     }
 
-    // Strictly read-only: no arming, no enabled feature, and no code patches (CrashFix needs no arming).
-    private static int RunProbe(string outputPath)
+    // Read-only: nothing is armed and no feature is enabled. Writes beside the exe, never to a caller-chosen path.
+    private static int RunProbe(TrainerEngine engine)
     {
-        using var engine = CreateEngine(CreateBindings(includeCodePatches: false));
         for (int elapsedMs = 0; elapsedMs < ProbeDurationMs; elapsedMs += TickIntervalMs)
         {
             engine.Tick();
@@ -51,7 +70,7 @@ internal static class Program
         }
 
         var status = engine.Status;
-        File.WriteAllLines(outputPath,
+        File.WriteAllLines(Path.Combine(AppContext.BaseDirectory, ProbeFileName),
         [
             $"attached: {status.IsAttached}",
             $"build: {status.BuildName}",
@@ -65,42 +84,52 @@ internal static class Program
         return status.IsAttached ? ExitOk : ExitNothingAttached;
     }
 
-    private static TrainerEngine CreateEngine(IReadOnlyList<FeatureBinding> bindings) =>
-        new(bindings.Select(binding => binding.Feature).ToList(), AttachToGame, NetworkEndpoints.OwnsAny);
-
-    private static AttachedGame? AttachToGame(out string failure)
+    private static bool IsElevated()
     {
-        var memory = Win32ProcessMemory.TryAttach(out failure);
+        using var identity = WindowsIdentity.GetCurrent();
+        return new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
+    }
+
+    // Anyone who can change this folder can run code as administrator at the next start.
+    private static bool FolderIsWritableByNonAdmins(string folder)
+    {
+        const FileSystemRights WriteRights = FileSystemRights.WriteData | FileSystemRights.AppendData
+            | FileSystemRights.Delete | FileSystemRights.DeleteSubdirectoriesAndFiles
+            | FileSystemRights.ChangePermissions | FileSystemRights.TakeOwnership;
+        var trusted = new[]
+        {
+            new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null),
+            new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null),
+            new SecurityIdentifier("S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464"), // TrustedInstaller
+            new SecurityIdentifier(WellKnownSidType.CreatorOwnerSid, null),
+        };
+
+        var rules = new DirectoryInfo(folder).GetAccessControl().GetAccessRules(true, true, typeof(SecurityIdentifier));
+        foreach (FileSystemAccessRule rule in rules)
+        {
+            if (rule.AccessControlType == AccessControlType.Allow
+                && (rule.FileSystemRights & WriteRights) != 0
+                && !trusted.Contains((SecurityIdentifier)rule.IdentityReference))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static TrainerEngine CreateEngine(IReadOnlyList<IFeature> features, bool allowSuspend) =>
+        new(features, (out string failure) => AttachToGame(allowSuspend, out failure), NetworkEndpoints.OwnsAny);
+
+    private static AttachedGame? AttachToGame(bool allowSuspend, out string failure)
+    {
+        var memory = Win32ProcessMemory.TryAttach(allowSuspend, out failure);
         return memory is null ? null : new AttachedGame(memory, memory.ExePath, memory.ProcessId, memory.StartTimeUtc);
     }
 
-    // Order is the display order and the hotkey order from F6; the window has six toggle hotkeys (F6-F10, Insert).
-    private static IReadOnlyList<FeatureBinding> CreateBindings(bool includeCodePatches)
-    {
-        if (!includeCodePatches)
-        {
-            return
-            [
-                new(new MoneyFloor(), () => null),
-                new(new GeneralPoints(), () => null),
-                new(new FastBuild(), () => null),
-                new(new FreeBuild(), () => null),
-                new(new PowerBonus(), () => null),
-                new(new SharedPowerCooldown(), () => null),
-            ];
-        }
-
-        // Diagnostic set: the code patches alone, to find out why they black out the picture.
-        var instantBuild = new InstantBuild();
-        var noCooldown = new NoCooldown();
-        var unlimitedPower = new UnlimitedPower();
-        var crashFix = new CrashFix();
-        return
-        [
-            new(instantBuild, () => instantBuild.Failure),
-            new(noCooldown, () => noCooldown.Failure),
-            new(unlimitedPower, () => unlimitedPower.Failure),
-            new(crashFix, () => crashFix.Failure),
-        ];
-    }
+    // Order is the display order and the hotkey order: F6-F10, then Insert.
+    private static IReadOnlyList<IFeature> CreateFeatures(bool includeCodePatches) =>
+        includeCodePatches
+            // Diagnostic set: the code patches alone, to find out why they black out the picture.
+            ? [new InstantBuild(), new NoCooldown(), new UnlimitedPower(), new CrashFix()]
+            : [new MoneyFloor(), new GeneralPoints(), new FastBuild(), new FreeBuild(), new PowerBonus(), new SharedPowerCooldown()];
 }

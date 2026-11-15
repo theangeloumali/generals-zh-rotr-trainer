@@ -15,6 +15,9 @@ public sealed class PowerBonus : IFeature
 
     public string Name => "Unlimited power";
 
+
+    public string Description => "Base never runs short";
+
     public bool Enabled { get; set; }
 
     public bool NeedsArming => true;

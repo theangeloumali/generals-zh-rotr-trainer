@@ -13,6 +13,9 @@ public sealed class GeneralPoints : IFeature
 
     public string Name => "General's points";
 
+
+    public string Description => "Points to spend, promotion on next kill";
+
     public bool Enabled { get; set; }
 
     public bool NeedsArming => true;

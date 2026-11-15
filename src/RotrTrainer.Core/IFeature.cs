@@ -7,7 +7,13 @@ public interface IFeature
 {
     string Name { get; }
 
+    /// <summary>One line for the window, saying what the player gets.</summary>
+    string Description { get; }
+
     bool Enabled { get; set; }
+
+    /// <summary>Why the feature could not be applied, or null. Value features cannot fail this way.</summary>
+    string? Failure => null;
 
     /// <summary>False for fixes with no gameplay effect: they apply whenever a known build is attached.</summary>
     bool NeedsArming { get; }

@@ -186,16 +186,13 @@ public static class CodePatchTests
         Check.Equal(writesBefore, SiteWrites(memory).Count, "second uninstall writes nothing to the site");
     }
 
-    public static void TestLeftoverJumpIsRestoredThenReinstalled()
+    public static void TestAHookThatIsNotOursIsRefusedAndLeftInPlace()
     {
         var memory = MemoryWithSite([0xE9, 0x11, 0x22, 0x33, 0x44, 0x90]);
         var patch = TestPatch();
         var result = patch.Install(memory);
-        Check.True(result.Succeeded, $"installed over a leftover: {result.Message}");
-        var writes = SiteWrites(memory);
-        Check.Equal(2, writes.Count, "restore, then hook");
-        Bytes(Convert.ToHexString(TestOriginals), writes[0].Data, "first write restores the originals");
-        Bytes(JumpToCaveHex(patch), writes[1].Data, "second write is the new jump");
+        Check.True(!result.Succeeded && result.Message.Contains("already hooked"), result.Message);
+        Check.Equal(0, SiteWrites(memory).Count, "another tool's hook is never overwritten");
     }
 
     public static void TestArmWritesTheDeadManWindow()
@@ -457,13 +454,13 @@ public static class CodePatchTests
         Check.True(feature.Failure is null, "Remove clears the failure so the next arm retries");
     }
 
-    public static void TestUnlimitedPowerClearsTheLocalSabotageTimer()
+    public static void TestUnlimitedPowerExpiresTheLocalSabotageTimer()
     {
         var memory = MemoryWithOriginals(UnlimitedPower.CreatePatches(Builds.Value[0].Addresses));
         uint sabotageField = LocalPlayer + GameAddresses.PlayerEnergySabotageFrame;
         memory.MapUInt32(sabotageField, 5000);
         new UnlimitedPower().Apply(Context(memory, 1000));
-        Check.Equal(0u, ReadUInt32(memory, sabotageField), "sabotage frame zeroed");
+        Check.Equal(PowerBonus.ExpiredSabotageFrame, ReadUInt32(memory, sabotageField), "sabotage expired, not zeroed");
     }
 
     public static void TestCrashFixInstallsWithoutArmingAndFollowsANewProcess()

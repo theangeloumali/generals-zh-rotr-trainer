@@ -11,6 +11,9 @@ public sealed class UnlimitedPower : IFeature
     private readonly PatchSet _patches = new(CreatePatches);
 
     public string Name => "Unlimited power";
+
+
+    public string Description => "Experimental: no brown-out by code patch";
     public bool Enabled { get; set; }
     public bool NeedsArming => true;
     public string? Failure => _patches.Failure;
@@ -64,7 +67,8 @@ public sealed class UnlimitedPower : IFeature
         if (context.LocalPlayer == 0)
             return;
         uint sabotageField = context.LocalPlayer + GameAddresses.PlayerEnergySabotageFrame;
-        if (context.Memory.ReadUInt32(sabotageField) is uint sabotagedUntil && sabotagedUntil != 0)
-            context.Memory.WriteUInt32(sabotageField, 0);
+        // Expired, not zero: Player::update lifts the brown-out only for a non-zero timer that is already past.
+        if (context.Memory.ReadUInt32(sabotageField) is > PowerBonus.ExpiredSabotageFrame)
+            context.Memory.WriteUInt32(sabotageField, PowerBonus.ExpiredSabotageFrame);
     }
 }

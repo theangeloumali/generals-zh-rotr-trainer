@@ -2,15 +2,29 @@
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
-    <UseWindowsForms>true</UseWindowsForms>
+    <UseWPF>true</UseWPF>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>12</LangVersion>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Deterministic>true</Deterministic>
+    <PathMap>$(MSBuildProjectDirectory)=/_/$(MSBuildProjectName)</PathMap>
     <AssemblyName>RotrTrainer</AssemblyName>
+    <Product>Command and Conquer Zero Hour RoTR Trainer</Product>
+    <AssemblyTitle>Command and Conquer Zero Hour RoTR Trainer</AssemblyTitle>
+    <Company>ZKidz Dev LLC</Company>
+    <Version>0.3.0</Version>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\app.ico</ApplicationIcon>
+    <StartupObject>RotrTrainer.Program</StartupObject>
+    <StartupHookSupport>false</StartupHookSupport>
+    <EnableUnsafeBinaryFormatterSerialization>false</EnableUnsafeBinaryFormatterSerialization>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\RotrTrainer.Core\RotrTrainer.Core.csproj" />
+    <Resource Include="Assets\zkidz-dev-logo.png" />
+    <Resource Include="Assets\Fonts\*.ttf" />
   </ItemGroup>
 </Project>

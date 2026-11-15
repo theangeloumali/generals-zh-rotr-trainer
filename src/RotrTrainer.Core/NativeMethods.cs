@@ -1,6 +1,9 @@
 using System.Runtime.InteropServices;
 using Microsoft.Win32.SafeHandles;
 
+// An elevated process must never pick up a native DLL from its own folder.
+[assembly: System.Runtime.InteropServices.DefaultDllImportSearchPaths(System.Runtime.InteropServices.DllImportSearchPath.System32)]
+
 namespace RotrTrainer.Core;
 
 internal static class NativeMethods

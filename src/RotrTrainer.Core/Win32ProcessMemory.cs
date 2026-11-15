@@ -12,8 +12,8 @@ namespace RotrTrainer.Core;
 /// </summary>
 public sealed class Win32ProcessMemory : IProcessMemory, IDisposable
 {
-    private const uint AccessRights = ProcessVmRead | ProcessVmWrite | ProcessVmOperation
-        | ProcessQueryLimitedInformation | Synchronize | ProcessSuspendResume;
+    private const uint ValueAccessRights = ProcessVmRead | ProcessVmWrite | ProcessVmOperation
+        | ProcessQueryLimitedInformation | Synchronize;
 
     private static readonly string[] GameProcessNames = ["modded", "game.dat"];
 
@@ -35,7 +35,8 @@ public sealed class Win32ProcessMemory : IProcessMemory, IDisposable
 
     public bool IsAlive => !_handle.IsClosed && WaitForSingleObject(_handle, 0) == WaitTimeout;
 
-    public static Win32ProcessMemory? TryAttach(out string failure)
+    /// <param name="allowSuspend">Only code patches pause the game; value features never ask for that right.</param>
+    public static Win32ProcessMemory? TryAttach(bool allowSuspend, out string failure)
     {
         var candidates = new List<int>();
         foreach (string name in GameProcessNames)
@@ -56,13 +57,14 @@ public sealed class Win32ProcessMemory : IProcessMemory, IDisposable
                 failure = $"{candidates.Count} game processes are running; close all but one";
                 return null;
             default:
-                return Open(candidates[0], out failure);
+                return Open(candidates[0], allowSuspend, out failure);
         }
     }
 
-    public static Win32ProcessMemory? Open(int processId, out string failure)
+    public static Win32ProcessMemory? Open(int processId, bool allowSuspend, out string failure)
     {
-        var handle = OpenProcess(AccessRights, false, processId);
+        uint accessRights = allowSuspend ? ValueAccessRights | ProcessSuspendResume : ValueAccessRights;
+        var handle = OpenProcess(accessRights, false, processId);
         if (handle.IsInvalid)
         {
             failure = $"cannot open process {processId}: {new Win32Exception(Marshal.GetLastWin32Error()).Message}";

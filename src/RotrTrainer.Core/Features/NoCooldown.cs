@@ -11,6 +11,9 @@ public sealed class NoCooldown : IFeature
     private readonly PatchSet _patches = new(CreatePatches);
 
     public string Name => "No cooldown";
+
+
+    public string Description => "Experimental: no recharge by code patch";
     public bool Enabled { get; set; }
     public bool NeedsArming => true;
     public string? Failure => _patches.Failure;

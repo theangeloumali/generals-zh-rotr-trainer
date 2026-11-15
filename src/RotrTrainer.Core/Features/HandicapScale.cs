@@ -11,6 +11,8 @@ public abstract class HandicapScale(float scale, uint unitsOffset, uint building
 
     public abstract string Name { get; }
 
+    public abstract string Description { get; }
+
     public bool Enabled { get; set; }
 
     public bool NeedsArming => true;
@@ -30,12 +32,10 @@ public abstract class HandicapScale(float scale, uint unitsOffset, uint building
 
     public void Remove(IProcessMemory memory)
     {
-        // A match that ended frees the player record; restore only where our own value is still in place.
-        bool stillOurs = _originalBitsByAddress.Count > 0
-            && _originalBitsByAddress.Keys.All(address => memory.ReadUInt32(address) == _scaleBits);
-        if (stillOurs)
+        // A match that ended frees the player record; restore each value only where ours is still in place.
+        foreach (var (address, originalBits) in _originalBitsByAddress)
         {
-            foreach (var (address, originalBits) in _originalBitsByAddress)
+            if (memory.ReadUInt32(address) == _scaleBits)
                 memory.WriteUInt32(address, originalBits);
         }
         _originalBitsByAddress.Clear();

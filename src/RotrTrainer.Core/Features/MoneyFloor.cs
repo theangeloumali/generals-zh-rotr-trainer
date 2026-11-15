@@ -6,7 +6,10 @@ public sealed class MoneyFloor : IFeature
     // Stays far below 0x7FFFFFFF because the HUD and AI read the balance as a signed Int.
     public const uint Floor = 1_000_000;
 
-    public string Name => "Money floor";
+    public string Name => "Money";
+
+
+    public string Description => "Never below 1,000,000";
 
     public bool Enabled { get; set; }
 

@@ -36,6 +36,8 @@ public static class BuildCatalog
         ["f37a4929f8d697104e99c2bcf46f8d833122c943afcd87fd077df641d344495b"] = "Game.dat (Zero Hour 1.04)",
     };
 
+    private const string StartPowerRechargePrologue = "53 56 8B F1 57 8B 7E F4 8B 47 08 85 C0 74 ?? 8B 4E F8 85 C9 74 ?? E8";
+
     private static readonly BytePattern UpgradeCalcTimeToBuildPattern =
         BytePattern.Parse("D9 41 14 D8 0D ?? ?? ?? ?? E8 ?? ?? ?? ?? C2 04 00");
 
@@ -55,11 +57,10 @@ public static class BuildCatalog
             BytePattern.Parse("83 EC 08 53 56 57 8B 7C 24 18 8B F1 8B 86 ?? ?? 00 00 56 6A 01")),
         new(nameof(GameAddresses.UpgradeCalcTimeToBuild), UpgradeCalcTimeToBuildPattern),
         new(nameof(GameAddresses.UpgradeBuildTimeConstant), UpgradeCalcTimeToBuildPattern, ImmediateAt: 5),
-        new(nameof(GameAddresses.StartPowerRecharge),
-            BytePattern.Parse("53 56 8B F1 57 8B 7E F4 8B 47 08 85 C0 74 ?? 8B 4E F8 85 C9 74 ?? E8")),
+        new(nameof(GameAddresses.StartPowerRecharge), BytePattern.Parse(StartPowerRechargePrologue)),
         // startPowerRecharge+16h: call getControllingPlayer with ecx = the module's Object.
         new(nameof(GameAddresses.GetControllingPlayer),
-            BytePattern.Parse("53 56 8B F1 57 8B 7E F4 8B 47 08 85 C0 74 ?? 8B 4E F8 85 C9 74 ?? E8 ?? ?? ?? ??"), Rel32At: 0x17),
+            BytePattern.Parse(StartPowerRechargePrologue + " ?? ?? ?? ??"), Rel32At: 0x17),
         new(nameof(GameAddresses.SpecialPowerCtorRechargeSite), CtorRechargePattern, Offset: 0x0F),
         new(nameof(GameAddresses.SpecialPowerCtorRechargeSkip), CtorRechargePattern, Offset: 0x2E),
         // Player::update after call hasSufficientPower: neg al; sbb al,al; inc al (the inlined brown-out copy).
@@ -104,6 +105,8 @@ public static class BuildCatalog
     internal static CatalogResult ResolveImage(PeImage image, string buildName)
     {
         var resolved = new Dictionary<string, uint>();
+        uint imageCheckAddress = 0;
+        byte[] imageCheckBytes = [];
         var text = image.Text;
         foreach (var site in Sites)
         {
@@ -112,6 +115,12 @@ public static class BuildCatalog
                 return CatalogResult.Refused($"{buildName}: {site.Name} signature has {count} matches, expected exactly 1");
 
             uint matchVa = image.TextVa + (uint)match;
+            if (site.Name == nameof(GameAddresses.PlayerListPointer))
+            {
+                // The HUD money read: no feature patches it, so the live process must match the file here.
+                imageCheckAddress = matchVa;
+                imageCheckBytes = text.Slice(match, site.Pattern.Length).ToArray();
+            }
             uint address = site switch
             {
                 { ImmediateAt: int at } => BinaryPrimitives.ReadUInt32LittleEndian(text[(match + at)..]),
@@ -126,6 +135,8 @@ public static class BuildCatalog
         return CatalogResult.Resolved(new GameAddresses
         {
             BuildName = buildName,
+            ImageCheckAddress = imageCheckAddress,
+            ImageCheckBytes = imageCheckBytes,
             PlayerListPointer = resolved[nameof(GameAddresses.PlayerListPointer)],
             GameLogicPointer = resolved[nameof(GameAddresses.GameLogicPointer)],
             CalcTimeToBuild = resolved[nameof(GameAddresses.CalcTimeToBuild)],

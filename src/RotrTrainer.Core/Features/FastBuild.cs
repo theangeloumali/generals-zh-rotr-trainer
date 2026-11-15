@@ -8,4 +8,6 @@ public sealed class FastBuild() : HandicapScale(
     public const float BuildTimeScale = 1f / 30f;
 
     public override string Name => "Fast build";
+
+    public override string Description => "Units and structures, not upgrades";
 }

@@ -11,6 +11,9 @@ public sealed class CrashFix : IFeature
     private readonly PatchSet _patches = new(CreatePatches);
 
     public string Name => "Move-away crash fix";
+
+
+    public string Description => "Experimental: fixes a known engine crash";
     public bool Enabled { get; set; } = true;
     public bool NeedsArming => false;
     public string? Failure => _patches.Failure;

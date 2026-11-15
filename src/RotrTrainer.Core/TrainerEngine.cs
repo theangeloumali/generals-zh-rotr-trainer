@@ -6,13 +6,15 @@ public sealed record AttachedGame(IProcessMemory Memory, string ExePath, int Pro
 /// <summary>Returns the running game, or null with the reason it could not attach.</summary>
 public delegate AttachedGame? GameAttacher(out string failure);
 
-public sealed record FeatureStatus(string Name, bool Enabled, bool NeedsArming);
+public sealed record FeatureStatus(string Name, string Description, bool Enabled, bool NeedsArming, string? Failure = null);
 
 public sealed record TrainerStatus(
     bool IsAttached,
     string? BuildName,
     string? Refusal,
     bool IsArmed,
+    bool MayArm,
+    bool GenToolPresent,
     string GuardReason,
     uint? Money,
     uint? SciencePurchasePoints,
@@ -28,6 +30,8 @@ public sealed class TrainerEngine(
     GameAttacher attach,
     Func<int, bool?> ownsNetworkEndpoints) : IDisposable
 {
+    private const string GenToolProxyDll = "d3d8.dll";
+
     private readonly HashSet<IFeature> _applied = [];
     private AttachedGame? _game;
     private GameAddresses? _addresses;
@@ -36,8 +40,9 @@ public sealed class TrainerEngine(
     private bool _armed;
     private uint? _armedLocalPlayer;
     private uint _lastFrame;
+    private bool _genToolPresent;
 
-    public TrainerStatus Status { get; private set; } = new(false, null, null, false, "no game attached", null, null, null, []);
+    public TrainerStatus Status { get; private set; } = new(false, null, null, false, false, false, "no game attached", null, null, null, []);
 
     public void Tick()
     {
@@ -61,15 +66,18 @@ public sealed class TrainerEngine(
             return false;
 
         _verdict = Evaluate(game, addresses);
-        if (_verdict.MayArm)
+        if (!_verdict.MayArm)
         {
-            var state = new GameState(game.Memory, addresses);
-            _armedLocalPlayer = state.LocalPlayer();
-            _lastFrame = state.Frame() ?? 0;
-            _armed = true;
+            Disarm();
+            return false;
         }
+
+        var state = new GameState(game.Memory, addresses);
+        _armedLocalPlayer = state.LocalPlayer();
+        _lastFrame = state.Frame() ?? 0;
+        _armed = true;
         Publish();
-        return _armed;
+        return true;
     }
 
     public void Disarm()
@@ -94,9 +102,17 @@ public sealed class TrainerEngine(
             return false;
         }
 
+        // GenTool ships as a d3d8.dll proxy beside the game; its presence on disk needs no extra process access.
+        _genToolPresent = File.Exists(Path.Combine(Path.GetDirectoryName(_game.ExePath) ?? "", GenToolProxyDll));
         var catalog = BuildCatalog.Resolve(_game.ExePath);
         _addresses = catalog.Addresses;
         _refusal = catalog.Refusal;
+        if (_addresses is { } addresses && !RunningImageMatchesFile(_game.Memory, addresses))
+        {
+            // The file can be replaced on disk while an older image keeps running; its addresses would be wrong.
+            _addresses = null;
+            _refusal = "the running game does not match its file on disk; restart the game";
+        }
         return true;
     }
 
@@ -115,7 +131,8 @@ public sealed class TrainerEngine(
         var context = new GameContext(game.Memory, addresses, localPlayer ?? 0, frame ?? 0);
         foreach (var feature in features)
         {
-            if (feature.Enabled && (_armed || !feature.NeedsArming))
+            // A fix that needs no arming still stays out of LAN, online and replay games.
+            if (feature.Enabled && (_armed || (!feature.NeedsArming && _verdict.MayArm)))
             {
                 feature.Apply(context);
                 _applied.Add(feature);
@@ -127,6 +144,12 @@ public sealed class TrainerEngine(
         }
     }
 
+    private static bool RunningImageMatchesFile(IProcessMemory memory, GameAddresses addresses)
+    {
+        byte[] live = new byte[addresses.ImageCheckBytes.Length];
+        return memory.TryRead(addresses.ImageCheckAddress, live) && live.AsSpan().SequenceEqual(addresses.ImageCheckBytes);
+    }
+
     private GuardVerdict Evaluate(AttachedGame game, GameAddresses addresses) =>
         Guards.Evaluate(game.Memory, addresses, () => ownsNetworkEndpoints(game.ProcessId));
 
@@ -134,9 +157,21 @@ public sealed class TrainerEngine(
     {
         var removing = _applied.Where(shouldRemove).ToList();
         _applied.ExceptWith(removing);
-        if (_game is not { Memory.IsAlive: true } game)
+        if (_game is not { } game)
             return;
-        RunGuardedAgainstDeath(game, () => removing.ForEach(feature => feature.Remove(game.Memory)));
+
+        // A dead process still gets the call: nothing can be undone there, but each feature must drop the
+        // addresses and caches it holds, or they would be trusted in the next game process.
+        foreach (var feature in removing)
+        {
+            try
+            {
+                feature.Remove(game.Memory);
+            }
+            catch (InvalidOperationException) when (!game.Memory.IsAlive)
+            {
+            }
+        }
     }
 
     // A suspend or write that fails because the game just exited is a state change, not an error.
@@ -162,6 +197,7 @@ public sealed class TrainerEngine(
         _addresses = null;
         _verdict = null;
         _refusal = null;
+        _genToolPresent = false;
     }
 
     private void Publish()
@@ -179,10 +215,12 @@ public sealed class TrainerEngine(
             BuildName: _addresses?.BuildName,
             Refusal: _refusal,
             IsArmed: _armed,
+            MayArm: _verdict?.MayArm ?? false,
+            GenToolPresent: _genToolPresent,
             GuardReason: _verdict?.Reason ?? _refusal ?? "no game attached",
             Money: ReadPlayer(GameAddresses.PlayerMoney),
             SciencePurchasePoints: ReadPlayer(GameAddresses.PlayerSciencePurchasePoints),
             RankLevel: ReadPlayer(GameAddresses.PlayerRankLevel),
-            Features: features.Select(feature => new FeatureStatus(feature.Name, feature.Enabled, feature.NeedsArming)).ToList());
+            Features: features.Select(feature => new FeatureStatus(feature.Name, feature.Description, feature.Enabled, feature.NeedsArming, feature.Failure)).ToList());
     }
 }

@@ -5,6 +5,10 @@ public sealed record GameAddresses
 {
     public required string BuildName { get; init; }
 
+    // Code the file holds at a fixed address; the running process must hold the same bytes before any write.
+    public required uint ImageCheckAddress { get; init; }
+    public required byte[] ImageCheckBytes { get; init; }
+
     // Globals (address of the pointer variable, not its value)
     public required uint PlayerListPointer { get; init; }
     public required uint GameLogicPointer { get; init; }
@@ -50,6 +54,11 @@ public sealed record GameAddresses
     public const uint GameLogicGameMode = 0x94;
 
     // Object lookup vector (ID -> Object*, entries may be NULL), proven at the findObjectByID inline near 0x4A16A0
+    // Head of the linked list of live objects. Derived from declaration order, so every node is checked
+    // against the lookup vector before it is trusted.
+    public const uint GameLogicFirstObject = 0x6C;
+    public const uint ObjectId = 0x64;
+    public const uint ObjectNext = 0x78;
     public const uint GameLogicObjectVectorBegin = 0x70;
     public const uint GameLogicObjectVectorEnd = 0x74;
 

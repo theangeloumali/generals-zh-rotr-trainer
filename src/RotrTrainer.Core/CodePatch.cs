@@ -78,12 +78,11 @@ public sealed class CodePatch
             return Failed("cannot read the site");
         if (!live.AsSpan().SequenceEqual(_originalBytes))
         {
-            if (!IsJumpPatch(live))
-                return Failed($"site holds {Convert.ToHexString(live)}, not the expected {Convert.ToHexString(_originalBytes)}");
-            // A jump left by a trainer that died: put the originals back before hooking again.
-            var restored = WriteSite(memory, _originalBytes, restoreOnFailure: false);
-            if (!restored.Succeeded)
-                return restored;
+            // A hook already there is not ours to remove: it may belong to another tool, or to a trainer
+            // that died in this game process. Either way the safe answer is to leave the game's code alone.
+            return Failed(IsJumpPatch(live)
+                ? "something else has already hooked this site; restart the game"
+                : $"site holds {Convert.ToHexString(live)}, not the expected {Convert.ToHexString(_originalBytes)}");
         }
         if (!WriteCave(memory))
             return Failed("could not allocate, write or protect the cave");
@@ -106,8 +105,8 @@ public sealed class CodePatch
             IsInstalled = false;
             return Succeeded();
         }
-        // Bytes that are neither ours nor the originals: a failure only if this patch thinks it is hooked.
-        if (!IsJumpPatch(live))
+        // Only our own jump is ours to undo; anything else at the site is left untouched.
+        if (!IsInstalled || !live.AsSpan().SequenceEqual(JumpToCave()))
             return IsInstalled ? Failed($"site holds {Convert.ToHexString(live)}; left untouched") : Succeeded();
         var restored = WriteSite(memory, _originalBytes, restoreOnFailure: false);
         if (restored.Succeeded)

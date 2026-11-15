@@ -28,6 +28,7 @@ public static class ValueFeatureTests
         memory.MapUInt32(GameLogicObject + GameAddresses.GameLogicGameMode, (uint)GameMode.Skirmish);
         memory.MapUInt32(addresses.PlayerListPointer, PlayerListObject);
         memory.MapUInt32(PlayerListObject + GameAddresses.PlayerListLocalPlayer, LocalPlayer);
+        memory.Map(addresses.ImageCheckAddress, addresses.ImageCheckBytes);
         MapPlayer(memory, LocalPlayer);
         MapPlayer(memory, OtherPlayer);
         return memory;
@@ -163,9 +164,8 @@ public static class ValueFeatureTests
         var feature = new FastBuild();
         feature.Apply(Context(memory));
         memory.MapUInt32(LocalPlayer + GameAddresses.PlayerBuildTimeHandicapUnits, 0xDEADBEEF);
-        int writesBefore = memory.Writes.Count;
         feature.Remove(memory);
-        Check.Equal(writesBefore, memory.Writes.Count, "a freed or reused player record is left alone");
+        Check.Equal(0xDEADBEEF, Read(memory, LocalPlayer + GameAddresses.PlayerBuildTimeHandicapUnits), "a value that is no longer ours is left alone");
     }
 
     public static void TestFastBuildRemoveWithoutApplyWritesNothing()
@@ -334,6 +334,73 @@ public static class ValueFeatureTests
         Check.Equal(100u, Read(memory, timer), "ready at the current frame");
     }
 
+    public static void TestBuildingPowerTimerFarIntoAHugeObjectTableIsStillReached()
+    {
+        // Late in a long match the table holds hundreds of thousands of mostly empty entries.
+        const int tableEntries = 200_000;
+        const int superweaponIndex = 150_000;
+        var memory = SkirmishWithObjects();
+        memory.Map(ObjectVector, new byte[4 * tableEntries]);
+        memory.MapUInt32(GameLogicObject + GameAddresses.GameLogicObjectVectorEnd, ObjectVector + 4 * tableEntries);
+        memory.MapUInt32(ObjectVector + 4 * superweaponIndex, 0x00A00000);
+        uint timer = MapObjectWithSuperweapon(memory, 0x00A00000, LocalPlayer, readyFrame: 9_000);
+
+        var feature = new SharedPowerCooldown();
+        for (int tick = 0; tick < 30; tick++)
+            feature.Apply(Context(memory));
+        Check.Equal(100u, Read(memory, timer), "reached within three seconds of ticks");
+    }
+
+    // Links objects into the game's live-object list and registers each in the ID lookup table.
+    private static void LinkLiveObjects(FakeMemory memory, params (uint Address, uint Id)[] objects)
+    {
+        memory.MapUInt32(GameLogicObject + GameAddresses.GameLogicFirstObject, objects.Length > 0 ? objects[0].Address : 0);
+        for (int index = 0; index < objects.Length; index++)
+        {
+            var (address, id) = objects[index];
+            memory.MapUInt32(address + GameAddresses.ObjectId, id);
+            memory.MapUInt32(address + GameAddresses.ObjectNext, index + 1 < objects.Length ? objects[index + 1].Address : 0);
+            memory.MapUInt32(ObjectVector + 4 * id, address);
+        }
+    }
+
+    public static void TestSuperweaponBuiltLateInALongMatchIsReached()
+    {
+        // IDs are never reused: after hours of play a new building's ID is in the millions.
+        const uint lateId = 3_000_000;
+        var memory = SkirmishWithObjects();
+        memory.MapUInt32(GameLogicObject + GameAddresses.GameLogicObjectVectorEnd, ObjectVector + 4 * 4_194_304);
+        uint timer = MapObjectWithSuperweapon(memory, 0x00A00000, LocalPlayer, readyFrame: 9_000);
+        LinkLiveObjects(memory, (0x00A00000, lateId));
+
+        new SharedPowerCooldown().Apply(Context(memory));
+        Check.Equal(100u, Read(memory, timer), "reached through the live-object list");
+    }
+
+    public static void TestLiveObjectListThatDoesNotMatchTheLookupTableIsNotTrusted()
+    {
+        var memory = SkirmishWithObjects(0x00A00000);
+        uint timer = MapObjectWithSuperweapon(memory, 0x00A00000, LocalPlayer, readyFrame: 9_000);
+        // A "list" whose head is not what the lookup table holds for its ID: the offsets cannot be trusted.
+        memory.MapUInt32(GameLogicObject + GameAddresses.GameLogicFirstObject, 0x00C00000);
+        memory.MapUInt32(0x00C00000 + GameAddresses.ObjectId, 0);
+        memory.MapUInt32(0x00C00000 + GameAddresses.ObjectNext, 0);
+
+        new SharedPowerCooldown().Apply(Context(memory));
+        Check.Equal(100u, Read(memory, timer), "falls back to scanning the lookup table");
+    }
+
+    public static void TestNoCooldownReportsWhatItFound()
+    {
+        var memory = SkirmishWithObjects(0x00A00000, 0x00B00000);
+        MapObjectWithSuperweapon(memory, 0x00A00000, LocalPlayer, readyFrame: 9_000);
+        MapObjectWithSuperweapon(memory, 0x00B00000, OtherPlayer, readyFrame: 9_000);
+        var feature = new SharedPowerCooldown();
+        Check.Equal("General powers and superweapons", feature.Description, "before any scan");
+        feature.Apply(Context(memory));
+        Check.Equal("1 of your units and buildings seen, 1 with a power", feature.Description, "after a full scan");
+    }
+
     public static void TestBuildingPowerTimerOfAnotherPlayerIsLeftAlone()
     {
         var memory = SkirmishWithObjects(0x00A00000);
@@ -402,6 +469,7 @@ public static class ValueFeatureTests
     private sealed class ProbeFeature(bool needsArming) : IFeature
     {
         public string Name => needsArming ? "armed probe" : "always probe";
+        public string Description => "test double";
         public bool Enabled { get; set; } = true;
         public bool NeedsArming => needsArming;
         public int Applies { get; private set; }
@@ -415,6 +483,37 @@ public static class ValueFeatureTests
         }
 
         public void Remove(IProcessMemory memory) => Removes++;
+    }
+
+    public static void TestStatusSaysArmingIsAllowedInASkirmish()
+    {
+        var (engine, _) = Engine(Skirmish(), [new MoneyFloor()]);
+        engine.Tick();
+        Check.True(engine.Status.MayArm, "skirmish allows arming");
+    }
+
+    public static void TestStatusSaysArmingIsNotAllowedAtTheMenu()
+    {
+        var memory = Skirmish();
+        memory.MapUInt32(GameLogicObject + GameAddresses.GameLogicGameMode, (uint)GameMode.Shell);
+        var (engine, _) = Engine(memory, [new MoneyFloor()]);
+        engine.Tick();
+        Check.True(!engine.Status.MayArm, "menu does not allow arming");
+    }
+
+    public static void TestStatusReportsGenToolWhenItsProxyDllSitsBesideTheGame()
+    {
+        var (engine, _) = Engine(Skirmish(), [new MoneyFloor()]);
+        engine.Tick();
+        Check.True(engine.Status.GenToolPresent, "d3d8.dll is in the game folder on this machine");
+    }
+
+    public static void TestStatusCarriesEachFeaturesDescription()
+    {
+        var (engine, _) = Engine(Skirmish(), [new MoneyFloor()]);
+        engine.Tick();
+        Check.Equal(new MoneyFloor().Description, engine.Status.Features[0].Description, "description");
+        Check.True(engine.Status.Features[0].Description.Length > 0, "not empty");
     }
 
     private static (TrainerEngine Engine, GameSlot Slot) Engine(
@@ -555,7 +654,7 @@ public static class ValueFeatureTests
         engine.Tick();
         Check.True(!engine.Status.IsArmed, "disarmed in the shell");
         Check.Equal(1, armed.Removes, "armed feature removed");
-        Check.Equal(0, always.Removes, "unarmed feature stays");
+        Check.Equal(1, always.Removes, "a fix that needs no arming still leaves a game the guards refuse");
 
         SetMode(memory, GameMode.Skirmish);
         engine.Tick();
@@ -605,13 +704,65 @@ public static class ValueFeatureTests
         engine.Tick();
         Check.Equal(2, slot.Attaches, "re-attached");
         Check.True(engine.Status.IsAttached && !engine.Status.IsArmed, "attached to the new game, disarmed");
-        Check.Equal(0, armed.Removes, "nothing to remove in a dead process");
+        Check.Equal(1, armed.Removes, "told to drop its state, even though the process is gone");
         Check.Equal(0, newMemory.Writes.Count, "nothing written before a new arm");
 
         Check.True(engine.Arm(), "arms the new game");
         engine.Tick();
         Check.Equal(MoneyFloor.Floor, Read(newMemory, LocalPlayer + GameAddresses.PlayerMoney), "new game money");
         Check.Equal(oldWrites, oldMemory.Writes.Count, "old game untouched");
+    }
+
+    public static void TestFastBuildIsUndoneInARestartedGame()
+    {
+        var oldMemory = SkirmishWithHandicaps();
+        var fastBuild = new FastBuild { Enabled = true };
+        var (engine, slot) = Engine(oldMemory, [fastBuild]);
+        engine.Tick();
+        Check.True(engine.Arm(), "armed");
+        engine.Tick();
+
+        oldMemory.IsAlive = false;
+        var newMemory = SkirmishWithHandicaps();
+        slot.Game = new AttachedGame(newMemory, ModdedExe, 4242, Started.AddMinutes(5));
+        engine.Tick();
+        Check.True(engine.Arm(), "arms the new game");
+        engine.Tick();
+        Check.Equal(FastScale, Read(newMemory, LocalPlayer + GameAddresses.PlayerBuildTimeHandicapUnits), "scaled in the new game");
+
+        engine.Disarm();
+        Check.Equal(NormalHandicap, Read(newMemory, LocalPlayer + GameAddresses.PlayerBuildTimeHandicapUnits), "restored on disarm");
+    }
+
+    public static void TestOneHandicapResetByTheGameStillLetsTheOtherRestore()
+    {
+        var memory = SkirmishWithHandicaps();
+        var feature = new FastBuild();
+        feature.Apply(Context(memory));
+        memory.MapUInt32(LocalPlayer + GameAddresses.PlayerBuildTimeHandicapUnits, NormalHandicap);
+        feature.Remove(memory);
+        Check.Equal(NormalHandicap, Read(memory, LocalPlayer + GameAddresses.PlayerBuildTimeHandicapBuildings), "buildings restored");
+    }
+
+    public static void TestArmWhileArmedReportsTheCurrentGuardVerdict()
+    {
+        var memory = Skirmish();
+        var engine = ArmedEngine(memory, new MoneyFloor());
+        memory.Map(LocalPlayer + GameAddresses.PlayerIsDead, [1]);
+        Check.True(!engine.Arm(), "a defeated player cannot stay armed");
+        Check.True(!engine.Status.IsArmed, "disarmed");
+    }
+
+    public static void TestARunningImageThatDiffersFromTheFileIsRefused()
+    {
+        var memory = SkirmishWithHandicaps();
+        byte[] otherCode = new byte[Modded.Value.ImageCheckBytes.Length];
+        memory.Map(Modded.Value.ImageCheckAddress, otherCode);
+        var (engine, _) = Engine(memory, [new FastBuild { Enabled = true }]);
+        engine.Tick();
+        Check.True(engine.Status.Refusal!.Contains("does not match"), engine.Status.Refusal);
+        Check.True(!engine.Arm(), "cannot arm against a different image");
+        Check.Equal(0, memory.Writes.Count, "nothing is written");
     }
 
     public static void TestProcessDeathIsAState()
@@ -631,7 +782,7 @@ public static class ValueFeatureTests
         Check.True(!engine.Arm(), "cannot arm without a game");
         engine.Disarm();
         engine.Dispose();
-        Check.Equal(0, armed.Removes, "no Remove into a dead process");
+        Check.Equal(1, armed.Removes, "told once to drop its state for the dead process");
     }
 
     public static void TestProcessDeathMidTickIsAState()
@@ -671,8 +822,8 @@ public static class ValueFeatureTests
         Check.Equal<uint?>(0, status.SciencePurchasePoints, "points");
         Check.Equal<uint?>(1, status.RankLevel, "rank");
         Check.Equal(2, status.Features.Count, "feature count");
-        Check.Equal(new FeatureStatus("Money floor", true, true), status.Features[0], "money feature");
-        Check.Equal(new FeatureStatus("always probe", true, false), status.Features[1], "probe feature");
+        Check.Equal(new FeatureStatus("Money", new MoneyFloor().Description, true, true), status.Features[0], "money feature");
+        Check.Equal(new FeatureStatus("always probe", "test double", true, false), status.Features[1], "probe feature");
     }
 
     public static void TestDisablingAnAppliedFeatureRemovesItOnce()
